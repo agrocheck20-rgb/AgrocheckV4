@@ -9,6 +9,11 @@ const state = {
   productsCache: null,
 };
 
+window.addEventListener("error", (e) => {
+  console.error("Global error:", e.error || e.message);
+  try { toast("Error JS: " + (e.error?.message || e.message), false); } catch {}
+});
+
 const PLANS = {
   BASICO: { quota: 30 },
   PRO: { quota: 200 },
@@ -68,22 +73,60 @@ sb.auth.onAuthStateChange((event, session) => {
 // Login
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const email = $("#loginEmail").value.trim();
-  const password = $("#loginPassword").value;
-  const { error } = await sb.auth.signInWithPassword({ email, password });
-  if (error) { toast(error.message, false); } else { toast("Bienvenido"); }
+  try {
+    const email = $("#loginEmail").value.trim();
+    const password = $("#loginPassword").value;
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) { toast("Error al iniciar sesión: " + error.message, false); return; }
+    toast("Inicio de sesión correcto");
+    await refreshSession();
+  } catch (err) {
+    console.error(err);
+    toast("Fallo de login (revisa la consola)", false);
+  }
 });
 
 // Signup
 $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const full_name = $("#signupName").value.trim();
-  const email = $("#signupEmail").value.trim();
-  const password = $("#signupPassword").value;
-  const plan = document.querySelector("input[name='plan']:checked")?.value || "BASICO";
-  const { data, error } = await sb.auth.signUp({ email, password });
-  if (error) { toast(error.message, false); return; }
-  toast("Cuenta creada. Iniciando...");
+  try {
+    const full_name = $("#signupName").value.trim();
+    const email = $("#signupEmail").value.trim();
+    const password = $("#signupPassword").value;
+    const plan = document.querySelector("input[name='plan']:checked")?.value || "BASICO";
+    const quota = PLANS[plan].quota;
+
+    const { data, error } = await sb.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: window.location.origin }
+    });
+    if (error) { toast("Error al registrarte: " + error.message, false); return; }
+
+    // Si confirmación de email está ACTIVADA, no habrá sesión aquí:
+    const { data: sessionData } = await sb.auth.getSession();
+    if (!sessionData?.session) {
+      toast("Registro creado. Confirma tu correo o desactiva la verificación en Supabase → Auth.", false);
+      return;
+    }
+
+    // Ya hay sesión: actualizamos el perfil con plan y nombre
+    const { data: u } = await sb.auth.getUser();
+    if (u?.user) {
+      const { error: upErr } = await sb.from("profiles")
+        .update({ full_name, plan, ia_quota: quota })
+        .eq("id", u.user.id);
+      if (upErr) console.warn(upErr);
+    }
+
+    toast("Cuenta creada y perfil actualizado");
+    await refreshSession();
+  } catch (err) {
+    console.error(err);
+    toast("Fallo de registro (revisa la consola)", false);
+  }
+});
+
   // Esperar a que el trigger cree el profile, luego actualizar plan
   setTimeout(async () => {
     const quota = PLANS[plan].quota;
